@@ -126,7 +126,7 @@ class MK8BakeShadowsPanel(bpy.types.Panel):
 
         # Verify UV Map exists for active object
         obj = context.active_object
-        if obj.type == 'MESH':
+        if obj is not None and obj.type == 'MESH':
             uv_selection_valid = False
             if not prop.use_uv_string:
                 uv_selection_valid = prop.uv_index < len(context.active_object.data.uv_textures)
