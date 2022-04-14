@@ -125,27 +125,32 @@ class MK8BakeShadows(bpy.types.Operator):
         bpy.ops.object.mode_set(mode='OBJECT')
 
         # Bake AO
-        img_ao = self.generate_image(context, image_name + "_ao")
+        img_ao = self.generate_image(context, image_name + "_ao", width=res_x, height=res_y)
         self.select_image_and_uv(context, img_ao, uv_index)
         self.bake(context, bake_type="AO", use_bake_normalize=True)
 
         # Bake Shadows
-        img_shadows = self.generate_image(context, image_name + "_shadow")
+        img_shadows = self.generate_image(context, image_name + "_shadow", width=res_x, height=res_y)
         self.select_image_and_uv(context, img_shadows, uv_index)
         self.bake(context, bake_type="SHADOW")
 
         # Combine bake maps in relevant image channels
-        img_combined = self.generate_image(context, image_name)
-        self.combine_channels(img_combined, red=img_ao, green=img_shadows, base_red=1.0, base_green=0.745, base_blue=0.0, base_alpha=1.0)
+        img_combined = self.generate_image(context, image_name, delete_existing=True,
+            color=(1.0, 0.745, 0.0, 1.0), width=res_x, height=res_y
+        )
+        self.combine_channels(img_combined, red=img_ao, green=img_shadows)
 
         print("MK8 Bake Shadows has finished!\n====================")
         return {'FINISHED'}
 
-    def generate_image(self, context, image_name):
+    def generate_image(self, context, image_name, delete_existing=True, **kwargs):
         """ TODO """
+        if delete_existing and image_name in bpy.data.images:
+            bpy.data.images.remove(bpy.data.images[image_name])
+
         if image_name not in bpy.data.images:
             # Create a new image if existing one doesn't exist
-            bpy.ops.image.new(name=image_name, width=1024, height=1024, alpha=False)
+            bpy.ops.image.new(name=image_name, alpha=False, **kwargs)
         return bpy.data.images[image_name]
 
     def select_image_and_uv(self, context, img, uv_index):
@@ -186,38 +191,41 @@ class MK8BakeShadows(bpy.types.Operator):
         for setting, val in old_settings.items():
             setattr(render, setting, val)
 
-    def combine_channels(self, img, red=None, green=None, blue=None, alpha=None,
-            base_red=1.0, base_green=1.0, base_blue=1.0, base_alpha=1.0):
+    def combine_channels(self, img, red=None, green=None, blue=None, alpha=None):
         """ TODO """
-        print("Writing combined channel...")
+        print("Writing combined image...")
 
         # Image editing is slow, so we create a copy of all the pixels first: https://blender.stackexchange.com/a/3678
         #   Using the tuple object is way faster than direct access to Image.pixels
         pixels = list(img.pixels)
-        red_channel = red and list(red.pixels)
-        green_channel = green and list(green.pixels)
-        blue_channel = blue and list(blue.pixels)
-        alpha_channel = alpha and list(alpha.pixels)
 
         # Red Channel
-        print("\tWriting red channel...")
-        for i in range(0, len(pixels), 4):
-            pixels[i] = red_channel[i]
+        if red is not None:
+            print("\tWriting red channel...")
+            red_channel = list(red.pixels)
+            for i in range(0, len(pixels), 4):
+                pixels[i] = red_channel[i]
 
         # Green Channel
-        print("\tWriting green channel...")
-        for i in range(1, len(pixels), 4):
-            pixels[i] = green_channel[i]
+        if green is not None:
+            print("\tWriting green channel...")
+            green_channel = list(green.pixels)
+            for i in range(1, len(pixels), 4):
+                pixels[i] = green_channel[i]
 
         # Blue Channel
-        print("\tWriting blue channel...")
-        for i in range(2, len(pixels), 4):
-            pixels[i] = base_blue
+        if blue is not None:
+            print("\tWriting blue channel...")
+            blue_channel = list(blue.pixels)
+            for i in range(2, len(pixels), 4):
+                pixels[i] = blue_channel[i]
 
         # Alpha Channel
-        print("\tWriting alpha channel...")
-        for i in range(3, len(pixels), 4):
-            pixels[i] = base_alpha
+        if alpha is not None:
+            print("\tWriting alpha channel...")
+            alpha_channel = list(alpha.pixels)
+            for i in range(3, len(pixels), 4):
+                pixels[i] = alpha_channel[i]
 
         # Write back to image (Slice notation here means to replace in-place, not sure if it's faster...)
         img.pixels[:] = pixels
