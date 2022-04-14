@@ -50,7 +50,7 @@ class MK8BakeShadowsProp(PropertyGroup):
     do_bake_shadows = BoolProperty(name="Shadows (Green Channel)", default=True)
 
     # Bake Options
-    bake_margin = IntProperty(name="bake_margin",
+    bake_margin = IntProperty(name="Margin",
         description="Extends the baked result as a post process filter",
         default=16,
         min=0,
@@ -177,10 +177,6 @@ class MK8BakeShadows(bpy.types.Operator):
         uv_index = scene.mk8bakeshadowsprop.uv_index
         if scene.mk8bakeshadowsprop.use_uv_string:
             uv_index = scene.mk8bakeshadowsprop.uv_name
-
-        # More on light shadows
-        # https://docs.blender.org/manual/en/2.79/render/blender_render/lighting/shadows/raytraced_properties.html
-        # Shadows should be enabled; constant falloff; more samples ==> better quality; constant > adaptive; soft-size = shadow-gradient size form light to dark
 
         # Enter object mode
         bpy.ops.object.mode_set(mode='OBJECT')
