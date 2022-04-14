@@ -1,31 +1,30 @@
 import bpy
 
-from bpy.types import Operator, Panel, PropertyGroup
-from bpy.props import StringProperty, BoolProperty, IntProperty, CollectionProperty, BoolVectorProperty, PointerProperty
-from datetime import datetime
+from bpy.types import PropertyGroup
+from bpy.props import StringProperty, BoolProperty, IntProperty, PointerProperty, EnumProperty
 
 bl_info = {
-    "name": "Mario Kart 8 - Bake Shadows",
+    "name": "Bake MK8 Shadows",
+    "description": "Create a bake map for shadows and ambient occlusion for use in Mario Kart 8.",
     "author": "Scutlet",
     "version": (0, 1),
     "blender": (2, 79, 0),
     "location": "Toolshelf > Layers Tab",
     "warning": "This addon is experimental", # Used for warning icon and text in addons panel
-    # "doc_url": "",
-    # "tracker_url": "",
+    "doc_url": "https://github.com/Scutlet/blender-mk8-bake-shadows",
+    "tracker_url": "https://github.com/Scutlet/blender-mk8-bake-shadows/issues",
     "support": "COMMUNITY",
     "category": "Mario Kart 8 Tools"
 }
 
-# TODO: Support Cycles render
-
 class MK8BakeShadowsProp(PropertyGroup):
     """ Properties for MK8 Bake Shadows """
     image_name = StringProperty(name="Image Name",
-        description="Name of the generated image. It will be replaced if it already exists."
+        description="Name of the generated image. It will be replaced if it already exists",
+        default="MK8_bakemap"
     )
 
-    res_x = IntProperty (name="X",
+    res_x = IntProperty(name="X",
         description="X Resolution of the image",
         default=1024,
         min=1,
@@ -36,7 +35,7 @@ class MK8BakeShadowsProp(PropertyGroup):
         subtype='PIXEL'
     )
 
-    res_y = IntProperty (name="Y",
+    res_y = IntProperty(name="Y",
         description="Y Resolution of the image",
         default=1024,
         min=1,
@@ -47,9 +46,32 @@ class MK8BakeShadowsProp(PropertyGroup):
         subtype='PIXEL'
     )
 
-    bake_ao = BoolProperty(name="Bake Ambient Occlusion (Red Channel)", default=True)
-    bake_shadows = BoolProperty(name="Bake Shadows (Green Channel)", default=True)
+    do_bake_ao = BoolProperty(name="Ambient Occlusion (Red Channel)", default=True)
+    do_bake_shadows = BoolProperty(name="Shadows (Green Channel)", default=True)
 
+    # Bake Options
+    bake_margin = IntProperty(name="bake_margin",
+        description="Extends the baked result as a post process filter",
+        default=16,
+        min=0,
+        max=64,
+        step=1,
+        subtype='PIXEL'
+    )
+
+    use_uv_string = BoolProperty(name="Match UV through name", default=False,
+        description="Use the selected object's UV map that matches this name. This is not recommended as the bake's UV map should be at index 1 when exporting a model"
+    )
+
+    uv_index = IntProperty(name="UV Index",
+        description="Index of the UV Map used for baking. Recommended at 1 as that's where the game expects the bake UV Map to be",
+        default=1,
+        min=0
+    )
+
+    uv_name = StringProperty(name="", description="Name of the UV Map used for baking",
+        default=""
+    )
 
 class MK8BakeShadowsPanel(bpy.types.Panel):
     """ Panel for MK8 Bake Shadows """
@@ -63,6 +85,9 @@ class MK8BakeShadowsPanel(bpy.types.Panel):
         layout = self.layout
         prop = context.scene.mk8bakeshadowsprop
 
+        # Image name
+        layout.row().prop(prop, "image_name")
+
         # Image info
         row = layout.row()
         col = row.column(align=True)
@@ -70,22 +95,65 @@ class MK8BakeShadowsPanel(bpy.types.Panel):
         col.prop(prop, "res_x")
         col.prop(prop, "res_y")
 
-        # Bake Options
+        # Bake Channel Options
         row = layout.row()
         col = row.column(align=True)
-        col.label(text="Bake Options:")
-        col.prop(prop, "bake_ao")
-        col.prop(prop, "bake_shadows")
+        col.label(text="Bake Channels:")
+        col.prop(prop, "do_bake_ao")
+        col.prop(prop, "do_bake_shadows")
 
-        # # UV Override
-        # split = layout.split(percentage=0.3)
-        # split.label(text="UV Map (Active Object):")
-        # obj = context.scene.objects.active
-        # split.prop_search(tex, "uv_layer", ob.data, "uv_textures", text="")
+        # Check if there's a lamp with shadows enabled in the scene
+        if prop.do_bake_shadows and not self.exists_shadow_lamp():
+            # No such lamp exists; issue a warning
+            layout.label("No Lamps with shadows; enable them in a Lamp's properties.", icon="ERROR")
 
-        row = layout.row()
-        row.operator("object.bake_mk8")
+        # Bake Options
+        box_bk = layout.box()
+        box_bk.row().label(text="Bake Options")
 
+        row = box_bk.row()
+        row.prop(prop, "bake_margin")
+
+        # UV Map
+        row = box_bk.row()
+        row.column(align=True).prop(prop, "use_uv_string")
+        col = row.column(align=True)
+
+        if not prop.use_uv_string:
+            col.prop(prop, "uv_index")
+        else:
+            col.prop(prop, "uv_name", icon="GROUP_UVS")
+
+        # Verify UV Map exists for active object
+        obj = context.active_object
+        if obj.type == 'MESH':
+            uv_selection_valid = False
+            if not prop.use_uv_string:
+                uv_selection_valid = prop.uv_index < len(context.active_object.data.uv_textures)
+            else:
+                uv_selection_valid = prop.uv_name in context.active_object.data.uv_textures
+
+            if not uv_selection_valid:
+                box_bk.row().label("UV Map does not exist for active object", icon="ERROR")
+            elif not prop.use_uv_string:
+                box_bk.row().label("UV map at this index: %s" % obj.data.uv_textures[prop.uv_index].name, icon="FILE_TICK")
+
+        # This would've been nice, but I can't seem to find a way to list the UV maps of all selected objects
+        # objs = context.selected_objects
+        # obj = context.active_object
+        # if obj is not None and obj.type == 'MESH':
+        #     col.prop_search(prop, "uv_name", obj.data, "uv_textures", text="")
+
+        # Bake button
+        layout.row().separator()
+        layout.row().operator("object.bake_mk8", icon="RENDER_STILL")
+
+    def exists_shadow_lamp(self):
+        """ Returns whether there exists at least one lamp casting shadows """
+        for lamp in bpy.data.lamps:
+            if lamp.shadow_method != 'NOSHADOW':
+                return True
+        return False
 
 class MK8BakeShadows(bpy.types.Operator):
     """ Bake shadows and ambient occlusion for Mario Kart 8 """ # Tooltip for menu items and buttons.
@@ -97,25 +165,18 @@ class MK8BakeShadows(bpy.types.Operator):
         print("====================\nMK8 Bake Shadows was started!")
         scene = context.scene
 
+        image_name = scene.mk8bakeshadowsprop.image_name
         res_x = scene.mk8bakeshadowsprop.res_x
         res_y = scene.mk8bakeshadowsprop.res_y
 
+        do_bake_ao = scene.mk8bakeshadowsprop.do_bake_ao
+        do_bake_shadows = scene.mk8bakeshadowsprop.do_bake_shadows
 
-        # bpy.ops.object.bake(type="AO", uv_layer=0)
+        bake_margin = scene.mk8bakeshadowsprop.bake_margin
 
-        dt_now = datetime.now()
-
-        image_name = "MK8_Bake1" #+ dt_now.isoformat()
-        uv_index = 1
-
-
-
-
-
-        # # Set bake info
-        # context.scene.render.bake_type = "AO"
-        # context.scene.render.use_bake_normalize = True
-        # print(context.scene.render.bake_samples) # for AO (default 256, [64, 1024])
+        uv_index = scene.mk8bakeshadowsprop.uv_index
+        if scene.mk8bakeshadowsprop.use_uv_string:
+            uv_index = scene.mk8bakeshadowsprop.uv_name
 
         # More on light shadows
         # https://docs.blender.org/manual/en/2.79/render/blender_render/lighting/shadows/raytraced_properties.html
@@ -124,15 +185,24 @@ class MK8BakeShadows(bpy.types.Operator):
         # Enter object mode
         bpy.ops.object.mode_set(mode='OBJECT')
 
+        # Select UV map
+        res = self.select_uv(context, uv_index)
+        if not res:
+            return {'FINISHED'}
+
         # Bake AO
-        img_ao = self.generate_image(context, image_name + "_ao", width=res_x, height=res_y)
-        self.select_image_and_uv(context, img_ao, uv_index)
-        self.bake(context, bake_type="AO", use_bake_normalize=True)
+        img_ao = None
+        if do_bake_ao:
+            img_ao = self.generate_image(context, image_name + "_ao", width=res_x, height=res_y)
+            self.select_image(context, img_ao, uv_index)
+            self.bake(context, bake_type="AO", use_bake_normalize=True, bake_margin=bake_margin)
 
         # Bake Shadows
-        img_shadows = self.generate_image(context, image_name + "_shadow", width=res_x, height=res_y)
-        self.select_image_and_uv(context, img_shadows, uv_index)
-        self.bake(context, bake_type="SHADOW")
+        img_shadows = None
+        if do_bake_shadows:
+            img_shadows = self.generate_image(context, image_name + "_shadow", width=res_x, height=res_y)
+            self.select_image(context, img_shadows, uv_index)
+            self.bake(context, bake_type="SHADOW", bake_margin=bake_margin)
 
         # Combine bake maps in relevant image channels
         img_combined = self.generate_image(context, image_name, delete_existing=True,
@@ -140,11 +210,20 @@ class MK8BakeShadows(bpy.types.Operator):
         )
         self.combine_channels(img_combined, red=img_ao, green=img_shadows)
 
+        # Select newly baked image
+        for area in bpy.context.screen.areas :
+            if area.type == 'IMAGE_EDITOR' :
+                area.spaces.active.image = img_combined
+
+        self.show_report("Bake complete!")
         print("MK8 Bake Shadows has finished!\n====================")
         return {'FINISHED'}
 
     def generate_image(self, context, image_name, delete_existing=True, **kwargs):
-        """ TODO """
+        """
+            Generates a new image or selects one that already has the given name.
+            If `delete_existing = True`, it will delete the one that has the given name first.
+        """
         if delete_existing and image_name in bpy.data.images:
             bpy.data.images.remove(bpy.data.images[image_name])
 
@@ -153,8 +232,17 @@ class MK8BakeShadows(bpy.types.Operator):
             bpy.ops.image.new(name=image_name, alpha=False, **kwargs)
         return bpy.data.images[image_name]
 
-    def select_image_and_uv(self, context, img, uv_index):
-        """ TODO """
+    def select_image(self, context, img, uv_index):
+        """ Selects the given image of the given UV Map in the editor so that it can be used in the baking process """
+        # Iterate over all selected objects
+        for obj in context.selected_objects:
+            # Set the target image
+            for d in obj.data.uv_textures[uv_index].data:
+                d.image = bpy.data.images[img.name]
+        return True
+
+    def select_uv(self, context, uv_index):
+        """ Selects the given UV Map in the editor such that it can be used in the baking process. Returns True if successful """
         # Iterate over all selected objects
         for obj in context.selected_objects:
             if obj.type != 'MESH':
@@ -163,18 +251,18 @@ class MK8BakeShadows(bpy.types.Operator):
                 continue
 
             # Verify UV textures
-            if len(obj.data.uv_textures) < uv_index:
-                raise IndexError("%s did not have a UVMap at index %s. Unselect it or add a UV map there" % (obj.name, uv_index))
+            is_number = type(uv_index) == int
+            if (is_number and uv_index >= len(obj.data.uv_textures)) or (not is_number and uv_index not in obj.data.uv_textures):
+                msg = "%s did not have a UVMap at index %s. Unselect the object or add a UV map there" % (obj.name, uv_index)
+                self.show_message(title="UV not found", message=msg, icon='ERROR')
+                return False
 
             # Make bake UVs active
             obj.data.uv_textures[uv_index].active = True
-
-            # Set the target image
-            for d in obj.data.uv_textures[uv_index].data:
-                d.image = bpy.data.images[img.name]
+        return True
 
     def bake(self, context, **kwargs):
-        """ TODO """
+        """ Bakes to the currently selected image with given settings """
         render = context.scene.render
 
         # Set render settings & store old ones
@@ -192,7 +280,7 @@ class MK8BakeShadows(bpy.types.Operator):
             setattr(render, setting, val)
 
     def combine_channels(self, img, red=None, green=None, blue=None, alpha=None):
-        """ TODO """
+        """ Combines multiple images each a separate channel in a new image """
         print("Writing combined image...")
 
         # Image editing is slow, so we create a copy of all the pixels first: https://blender.stackexchange.com/a/3678
@@ -233,22 +321,30 @@ class MK8BakeShadows(bpy.types.Operator):
         # Should probably update image
         img.update()
 
+    def show_message(self, message="", title="Message", icon='INFO'):
+        """ Shows a popup menu """
+        # https://blender.stackexchange.com/questions/109711/how-to-popup-simple-message-box-from-python-console
+        def draw(self, context):
+            self.layout.label(text=message)
+        bpy.context.window_manager.popup_menu(draw, title=title, icon=icon)
+
+    def show_report(self, message):
+        """ Shows a message in the top panel """
+        self.report({'INFO'}, message)
+
+
 def register():
     """ Runs when enabling the addon """
-    print("Enabled MK8 Bake Shadows!")
-    import sys
-    print(sys.version)
-
+    print("Enabled MK8 Bake Shadows. Yahooo!")
     bpy.utils.register_class(MK8BakeShadows)
     bpy.utils.register_class(MK8BakeShadowsPanel)
     bpy.utils.register_class(MK8BakeShadowsProp)
 
     bpy.types.Scene.mk8bakeshadowsprop = PointerProperty(type=MK8BakeShadowsProp)
 
-
 def unregister():
     """ Runs when disabling the addon """
-    print("Disabled MK8 Bake Shadows!")
+    print("Disabled MK8 Bake Shadows. Buh-bye!")
     bpy.utils.unregister_class(MK8BakeShadows)
     bpy.utils.unregister_class(MK8BakeShadowsPanel)
     bpy.utils.unregister_class(MK8BakeShadowsProp)
